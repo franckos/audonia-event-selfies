@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SelfSnap Photobooth - Backend (Frames API + ingest) + CloudFront
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures:
+    - x86_64
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        DDB_TABLE_NAME:
+          Ref: SSFramesTable
+Parameters:
+  SiteBucketName:
+    Type: String
+    Default: selfsnap-site-dd
+  FramesBucketName:
+    Type: String
+    Default: selfsnap-frames-dd
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Ref: SiteBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+  FramesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Ref: FramesBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+  SSFramesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SelfSnapFrames
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: s3Key
+        AttributeType: S
+      - AttributeName: gsi1pk
+        AttributeType: S
+      - AttributeName: gsi1sk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: s3Key
+        KeyType: HASH
+      GlobalSecondaryIndexes:
+      - IndexName: GSI1
+        KeySchema:
+        - AttributeName: gsi1pk
+          KeyType: HASH
+        - AttributeName: gsi1sk
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+        - '*'
+        AllowMethods:
+        - GET
+        - OPTIONS
+        AllowHeaders:
+        - '*'
+  ListFramesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: selfsnap-list-frames
+      Handler: src/listFrames.handler
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: SSFramesTable
+      Events:
+        GetFrames:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: HttpApi
+            Path: /frames
+            Method: GET
+      Environment:
+        Variables:
+          CLOUDFRONT_DOMAIN:
+            Fn::GetAtt:
+            - CloudFrontDistribution
+            - DomainName
+      CodeUri: ListFramesFunction
+    Metadata:
+      SamResourceId: ListFramesFunction
+  IngestFrameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: selfsnap-ingest-frame
+      Handler: src/ingestFrame.handler
+      Timeout: 15
+      Policies:
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: SSFramesTable
+      Events:
+        FramesUpload:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: FramesBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: prefix
+                  Value: frames/
+      CodeUri: IngestFrameFunction
+    Metadata:
+      SamResourceId: IngestFrameFunction
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: selfsnap-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+        - Id: SiteOrigin
+          DomainName:
+            Fn::GetAtt:
+            - SiteBucket
+            - RegionalDomainName
+          S3OriginConfig: {}
+          OriginAccessControlId:
+            Ref: CloudFrontOAC
+        - Id: FramesOrigin
+          DomainName:
+            Fn::GetAtt:
+            - FramesBucket
+            - RegionalDomainName
+          S3OriginConfig: {}
+          OriginAccessControlId:
+            Ref: CloudFrontOAC
+        DefaultCacheBehavior:
+          TargetOriginId: SiteOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          CachedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          ForwardedValues:
+            QueryString: false
+        CacheBehaviors:
+        - PathPattern: /frames/*
+          TargetOriginId: FramesOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          CachedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          ForwardedValues:
+            QueryString: false
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: SiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowCloudFrontRead
+          Effect: Allow
+          Principal:
+            Service: cloudfront.amazonaws.com
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: arn:aws:s3:::${SiteBucketName}/*
+          Condition:
+            StringEquals:
+              AWS:SourceArn:
+                Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+  FramesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: FramesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowCloudFrontRead
+          Effect: Allow
+          Principal:
+            Service: cloudfront.amazonaws.com
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: arn:aws:s3:::${FramesBucketName}/*
+          Condition:
+            StringEquals:
+              AWS:SourceArn:
+                Fn::Sub: arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+Outputs:
+  CloudFrontDomain:
+    Value:
+      Fn::GetAtt:
+      - CloudFrontDistribution
+      - DomainName
+  CloudFrontUrl:
+    Value:
+      Fn::Sub: https://${CloudFrontDistribution.DomainName}
+  ApiEndpoint:
+    Value:
+      Fn::Sub: https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  SiteBucketOut:
+    Value:
+      Ref: SiteBucket
+  FramesBucketOut:
+    Value:
+      Ref: FramesBucket
