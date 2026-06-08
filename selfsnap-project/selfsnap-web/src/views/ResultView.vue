@@ -137,7 +137,7 @@ function formatMMDDYYYY(d: Date) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const yy = String(d.getFullYear());
-  return `${mm}-${dd}-${yy}`;
+  return `${dd}.${mm}.${yy}`;
 }
 
 function canvasFilterString(mode: FilterMode) {
@@ -254,34 +254,20 @@ async function compose() {
     ctx.restore();
   }
 
-  const sampleX = Math.floor(W * 0.15);
-  const sampleW = Math.floor(W * 0.7);
-  const sampleY = H - 320;
-  const sampleH = 240;
-
-  const footerTextColor = pickTextColorFromRegion(
-    ctx,
-    sampleX,
-    sampleY,
-    sampleW,
-    sampleH,
-  );
+  const headerTextColor = pickTextColorFromRegion(ctx, Math.floor(W * 0.15), 20, Math.floor(W * 0.7), 180);
+  const footerTextColor = pickTextColorFromRegion(ctx, Math.floor(W * 0.15), H - 320, Math.floor(W * 0.7), 240);
 
   ctx.save();
-
   ctx.textAlign = "center";
-  ctx.fillStyle = footerTextColor;
 
-  //Drop Shadow
-  // ctx.shadowColor = "rgba(0, 0, 0, 0.25)";
-  // ctx.shadowBlur = 6;
-  // ctx.shadowOffsetX = 0;
-  // ctx.shadowOffsetY = 2;
-
+  // Title at top
+  ctx.fillStyle = headerTextColor;
   ctx.font = "bold 96px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  ctx.fillText("IA On Track!", W / 2, H - 220);
+  ctx.fillText("IA On Track!", W / 2, 120);
 
-  ctx.font = "500 54px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  // Date at bottom, smaller
+  ctx.fillStyle = footerTextColor;
+  ctx.font = "400 48px system-ui, -apple-system, Segoe UI, Roboto, Arial";
   ctx.fillText(dateStr.value, W / 2, H - 150);
 
   ctx.restore();
